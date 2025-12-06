@@ -18,7 +18,6 @@ const WEBSHARE_API_KEY = (process.env.WEBSHARE_API_KEY || '').trim();
 let mfaAuthToken = null;
 let latestSequence = null;
 let heartbeatTimer = null;
-let tlsSocket = null;
 const vanityMap = new Map();
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -163,58 +162,58 @@ async function sendHttpRequest(method, path, body = null, extraHeaders = {}, clo
   return new Promise(async (resolve) => {
     const payload = body ? JSON.stringify(body) : '';
     
-    if (!tlsSocket || tlsSocket.destroyed || closeConnection) {
-      try {
-        tlsSocket = await createTlsSocket();
-        tlsSocket.setNoDelay(true);
-      } catch (err) {
-        console.error('Failed to create TLS socket:', err.message);
-        return resolve('{}');
+    try {
+      const socket = await createTlsSocket();
+      socket.setNoDelay(true);
+      
+      const headers = [
+        `${method} ${path} HTTP/1.1`,
+        'Host: canary.discord.com',
+        'Connection: close',
+        'Content-Type: application/json',
+        `Content-Length: ${Buffer.byteLength(payload)}`,
+        `User-Agent: ${USER_AGENT}`,
+        `Authorization: ${USER_TOKEN}`,
+        `X-Super-Properties: ${X_SUPER_PROPERTIES}`,
+        'X-Discord-Locale: en-US',
+        'X-Discord-Timezone: America/New_York',
+        'Accept: */*',
+        'Accept-Language: en-US,en;q=0.9',
+        'Referer: https://canary.discord.com/channels/@me',
+        'Origin: https://canary.discord.com'
+      ];
+      
+      if (extraHeaders['X-Discord-MFA-Authorization']) {
+        headers.push(`X-Discord-MFA-Authorization: ${extraHeaders['X-Discord-MFA-Authorization']}`);
       }
-    }
-    
-    const socket = tlsSocket;
-    
-    const headers = [
-      `${method} ${path} HTTP/1.1`,
-      'Host: canary.discord.com',
-      `Connection: ${closeConnection ? 'close' : 'keep-alive'}`,
-      'Content-Type: application/json',
-      `Content-Length: ${Buffer.byteLength(payload)}`,
-      `User-Agent: ${USER_AGENT}`,
-      `Authorization: ${USER_TOKEN}`,
-      `X-Super-Properties: ${X_SUPER_PROPERTIES}`,
-      'X-Discord-Locale: en-US',
-      'X-Discord-Timezone: America/New_York',
-      'Accept: */*',
-      'Accept-Language: en-US,en;q=0.9',
-      'Referer: https://canary.discord.com/channels/@me',
-      'Origin: https://canary.discord.com'
-    ];
-    
-    if (extraHeaders['X-Discord-MFA-Authorization']) {
-      headers.push(`X-Discord-MFA-Authorization: ${extraHeaders['X-Discord-MFA-Authorization']}`);
-    }
-    
-    headers.push('', payload);
-    
-    let responseData = '';
-    socket.write(headers.join('\r\n'));
-    
-    socket.once('error', () => resolve('{}'));
-    
-    socket.on('data', (chunk) => {
-      responseData += chunk.toString();
-    });
-    
-    socket.once('end', () => {
-      try {
+      
+      headers.push('', payload);
+      
+      let responseData = '';
+      let resolved = false;
+      let timeoutId = null;
+      
+      const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        socket.removeAllListeners();
+        socket.destroy();
+      };
+      
+      const finish = (result) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve(result);
+      };
+      
+      const parseResponse = () => {
         const separatorIndex = responseData.indexOf('\r\n\r\n');
-        if (separatorIndex === -1) return resolve('{}');
+        if (separatorIndex === -1) return '{}';
         
+        const headerPart = responseData.slice(0, separatorIndex).toLowerCase();
         let bodyData = responseData.slice(separatorIndex + 4);
         
-        if (responseData.toLowerCase().includes('transfer-encoding: chunked')) {
+        if (headerPart.includes('transfer-encoding: chunked')) {
           let decoded = '';
           let pos = 0;
           while (pos < bodyData.length) {
@@ -225,16 +224,35 @@ async function sendHttpRequest(method, path, body = null, extraHeaders = {}, clo
             decoded += bodyData.substr(sizeEnd + 2, size);
             pos = sizeEnd + 2 + size + 2;
           }
-          resolve(decoded || '{}');
+          return decoded || '{}';
         } else {
-          resolve(bodyData || '{}');
+          const contentLengthMatch = headerPart.match(/content-length:\s*(\d+)/);
+          if (contentLengthMatch) {
+            const contentLength = parseInt(contentLengthMatch[1]);
+            return bodyData.slice(0, contentLength) || '{}';
+          }
+          return bodyData || '{}';
         }
-      } catch {
-        resolve('{}');
-      } finally {
-        if (closeConnection) socket.destroy();
-      }
-    });
+      };
+      
+      socket.on('data', (chunk) => {
+        responseData += chunk.toString();
+      });
+      
+      socket.on('error', () => finish('{}'));
+      
+      socket.on('end', () => finish(parseResponse()));
+      
+      socket.on('close', () => finish(parseResponse()));
+      
+      socket.write(headers.join('\r\n'));
+      
+      timeoutId = setTimeout(() => finish('{}'), 10000);
+      
+    } catch (err) {
+      console.error('Failed to create TLS socket:', err.message);
+      resolve('{}');
+    }
   });
 }
 
@@ -379,7 +397,7 @@ async function pollTargetVanity() {
   const poll = async () => {
     const claimed = await checkAndClaimVanity();
     if (!claimed) {
-      setImmediate(poll);
+      setTimeout(poll, 100);
     }
   };
   

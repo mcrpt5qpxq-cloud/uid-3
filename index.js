@@ -5,15 +5,13 @@ import axios from 'axios';
 import fs from 'fs';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-// Configuration - Set these via environment variables
 const USER_TOKEN = process.env.USER_TOKEN || '';
 const TARGET_GUILD_ID = process.env.TARGET_GUILD_ID || '';
 const USER_PASSWORD = process.env.USER_PASSWORD || '';
 const WEBHOOK = process.env.WEBHOOK || '';
 
-// Proxy configuration
-const PROXY_URL = process.env.PROXY_URL || ''; // Format: http://user:pass@host:port
-const WEBSHARE_API_KEY = process.env.WEBSHARE_API_KEY || '';
+const PROXY_URL = (process.env.PROXY_URL || '').trim();
+const WEBSHARE_API_KEY = (process.env.WEBSHARE_API_KEY || '').trim();
 
 let mfaAuthToken = null;
 let latestSequence = null;
@@ -22,9 +20,8 @@ let tlsSocket = null;
 const vanityMap = new Map();
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-const X_SUPER_PROPERTIES = 'eyJvcyI6IldpbmRvd3MiLCJicm93c2VyIjoiQ2hyb21lIiwiZGV2aWNlIjoiIiwic3lzdGVtX2xvY2FsZSI6InRyLVRSIiwiYnJvd3Nlcl91c2VyX2FnZW50IjoiTW96aWxsYS81LjAgKFdpbmRvd3MgTlQgMTAuMDsgV2luNjQ7IHg2NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEzMS4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTMxLjAuMC4wIiwib3NfdmVyc2lvbiI6IjEwIiwicmVmZXJyZXIiOiJodHRwczovL3d3dy5nb29nbGUuY29tLyIsInJlZmVycmluZ19kb21haW4iOiJ3d3cuZ29vZ2xlLmNvbSIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJzdGFibGUiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNTgyOTUsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGwsImRlc2lnbl9pZCI6MH0=';
+const X_SUPER_PROPERTIES = 'eyJvcyI6IldpbmRvd3MiLCJicm93c2VyIjoiQ2hyb21lIiwiZGV2aWNlIjoiIiwic3lzdGVtX2xvY2FsZSI6ImVuLVVTIiwiYnJvd3Nlcl91c2VyX2FnZW50IjoiTW96aWxsYS81LjAgKFdpbmRvd3MgTlQgMTAuMDsgV2luNjQ7IHg2NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEzMS4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTMxLjAuMC4wIiwib3NfdmVyc2lvbiI6IjEwIiwicmVmZXJyZXIiOiJodHRwczovL3d3dy5nb29nbGUuY29tLyIsInJlZmVycmluZ19kb21haW4iOiJ3d3cuZ29vZ2xlLmNvbSIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJzdGFibGUiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNTgyOTUsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGwsImRlc2lnbl9pZCI6MH0=';
 
-// Fetch proxy list from Webshare API
 async function fetchWebshareProxies() {
   if (!WEBSHARE_API_KEY) {
     console.log('No Webshare API key configured');
@@ -32,7 +29,12 @@ async function fetchWebshareProxies() {
   }
   
   try {
-    const response = await axios.get('https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=25', {
+    const response = await axios.get('https://proxy.webshare.io/api/v2/proxy/list/', {
+      params: {
+        mode: 'direct',
+        page: 1,
+        page_size: 25
+      },
       headers: {
         'Authorization': `Token ${WEBSHARE_API_KEY}`
       }
@@ -43,20 +45,20 @@ async function fetchWebshareProxies() {
       const proxyUrl = `http://${proxy.username}:${proxy.password}@${proxy.proxy_address}:${proxy.port}`;
       console.log(`Loaded proxy: ${proxy.proxy_address}:${proxy.port}`);
       return proxyUrl;
+    } else {
+      console.log('No proxies found in Webshare account');
     }
   } catch (err) {
-    console.error('Failed to fetch Webshare proxies:', err.message);
+    console.error('Failed to fetch Webshare proxies:', err.response?.data?.detail || err.message);
   }
   return null;
 }
 
-// Get the current proxy URL
 async function getProxyUrl() {
   if (PROXY_URL) return PROXY_URL;
   return await fetchWebshareProxies();
 }
 
-// Parse proxy URL into components
 function parseProxyUrl(proxyUrl) {
   const url = new URL(proxyUrl);
   return {
@@ -66,7 +68,6 @@ function parseProxyUrl(proxyUrl) {
   };
 }
 
-// Create TLS socket through proxy using CONNECT tunnel
 function createTlsSocketThroughProxy(proxyUrl) {
   return new Promise((resolve, reject) => {
     const proxy = parseProxyUrl(proxyUrl);
@@ -109,7 +110,6 @@ function createTlsSocketThroughProxy(proxyUrl) {
   });
 }
 
-// Create direct TLS socket (no proxy)
 function createDirectTlsSocket() {
   return tls.connect({
     host: 'canary.discord.com',
@@ -124,7 +124,7 @@ const loadMfaToken = () => {
   fs.readFile("mfa.txt", "utf8", (err, data) => {
     if (!err && data.trim()) {
       mfaAuthToken = data.trim();
-      console.log('MFA token yuklendi');
+      console.log('MFA token loaded');
     }
   });
 };
@@ -139,7 +139,7 @@ fs.watch("mfa.txt", (eventType) => {
 
 function sendWebhook(vanityUrl) {
   axios.post(WEBHOOK, {
-    content: `hedef url alindi: **${vanityUrl}** @everyone @here`
+    content: `Target URL claimed: **${vanityUrl}** @everyone @here`
   }).catch(() => {});
 }
 
@@ -178,10 +178,10 @@ async function sendHttpRequest(method, path, body = null, extraHeaders = {}, clo
       `User-Agent: ${USER_AGENT}`,
       `Authorization: ${USER_TOKEN}`,
       `X-Super-Properties: ${X_SUPER_PROPERTIES}`,
-      'X-Discord-Locale: tr',
-      'X-Discord-Timezone: Europe/Istanbul',
+      'X-Discord-Locale: en-US',
+      'X-Discord-Timezone: America/New_York',
       'Accept: */*',
-      'Accept-Language: tr-TR,tr;q=0.9',
+      'Accept-Language: en-US,en;q=0.9',
       'Referer: https://canary.discord.com/channels/@me',
       'Origin: https://canary.discord.com'
     ];
@@ -274,7 +274,7 @@ async function establishGatewayConnection() {
           os: 'Windows',
           browser: 'Chrome',
           device: '',
-          system_locale: 'tr-TR',
+          system_locale: 'en-US',
           browser_user_agent: USER_AGENT,
           browser_version: '131.0.0.0',
           os_version: '10',
@@ -304,7 +304,7 @@ async function establishGatewayConnection() {
       if (packet.t === 'GUILD_UPDATE') {
         const oldCode = vanityMap.get(packet.d.guild_id);
         if (oldCode && oldCode !== packet.d.vanity_url_code) {
-          console.log(`Vanity degisti: ${oldCode}`);
+          console.log(`Vanity changed: ${oldCode}`);
           
           let success = false;
           for (let i = 0; i < 3; i++) {
@@ -315,7 +315,7 @@ async function establishGatewayConnection() {
             try {
               const snipeData = JSON.parse(snipeResp);
               if (snipeData.code === oldCode || snipeData.vanity_url_code === oldCode || (!snipeData.code && !snipeData.message)) {
-                console.log(`URL alindi: ${oldCode}`);
+                console.log(`URL claimed: ${oldCode}`);
                 sendWebhook(oldCode);
                 success = true;
                 break;
@@ -324,23 +324,23 @@ async function establishGatewayConnection() {
           }
           
           if (!success) {
-            console.log(`URL alinamadi: ${oldCode}`);
+            console.log(`Failed to claim URL: ${oldCode}`);
           }
         }
       } else if (packet.t === 'READY') {
-        console.log('[BAGLANTI] Gateway baglantisi basarili');
+        console.log('[CONNECTION] Gateway connection successful');
         packet.d.guilds.forEach(g => {
           if (g.vanity_url_code) {
             vanityMap.set(g.id, g.vanity_url_code);
           }
         });
-        console.log(`${vanityMap.size} vanity URL izleniyor`);
+        console.log(`Monitoring ${vanityMap.size} vanity URLs`);
       }
     }
   });
   
   ws.on('close', () => {
-    console.log('[HATA] Baglanti koptu, yeniden baglaniyor...');
+    console.log('[ERROR] Connection lost, reconnecting...');
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     setTimeout(establishGatewayConnection, 5000);
   });
@@ -352,14 +352,14 @@ async function establishGatewayConnection() {
 }
 
 async function main() {
-  console.log('Program baslatiliyor...');
+  console.log('Starting program...');
   console.log('Proxy support: ' + (PROXY_URL || WEBSHARE_API_KEY ? 'Enabled' : 'Disabled'));
   
   if (!mfaAuthToken) {
-    console.log('Token aliniyor...');
+    console.log('Fetching token...');
     mfaAuthToken = await authenticateMfa();
     if (mfaAuthToken) {
-      console.log('Token basariyla alindi');
+      console.log('Token successfully retrieved');
     }
   }
   

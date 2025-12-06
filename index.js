@@ -7,6 +7,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const USER_TOKEN = process.env.USER_TOKEN || '';
 const TARGET_GUILD_ID = process.env.TARGET_GUILD_ID || '';
+const TARGET_VANITY = process.env.TARGET_VANITY || '';
 const USER_PASSWORD = process.env.USER_PASSWORD || '';
 const WEBHOOK = process.env.WEBHOOK || '';
 
@@ -356,9 +357,39 @@ async function establishGatewayConnection() {
   });
 }
 
+async function checkAndClaimVanity() {
+  try {
+    const claimResp = await sendHttpRequest('PATCH', `/api/v7/guilds/${TARGET_GUILD_ID}/vanity-url`, {
+      code: TARGET_VANITY
+    }, { 'X-Discord-MFA-Authorization': mfaAuthToken });
+    
+    const claimData = JSON.parse(claimResp);
+    if (claimData.code === TARGET_VANITY || claimData.vanity_url_code === TARGET_VANITY || (!claimData.code && !claimData.message)) {
+      console.log(`URL claimed: ${TARGET_VANITY}`);
+      sendWebhook(TARGET_VANITY);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function pollTargetVanity() {
+  console.log(`Polling for vanity: ${TARGET_VANITY}`);
+  
+  const poll = async () => {
+    const claimed = await checkAndClaimVanity();
+    if (!claimed) {
+      setImmediate(poll);
+    }
+  };
+  
+  poll();
+}
+
 async function main() {
   console.log('Starting program...');
   console.log('Proxy support: ' + (PROXY_ENABLED ? 'Enabled' : 'Disabled'));
+  console.log('Mode: ' + (TARGET_VANITY ? `Targeting vanity "${TARGET_VANITY}"` : 'Monitoring joined servers'));
   
   if (!mfaAuthToken) {
     console.log('Fetching token...');
@@ -373,7 +404,11 @@ async function main() {
     if (refreshedToken) mfaAuthToken = refreshedToken;
   }, 4 * 60 * 1000);
   
-  establishGatewayConnection();
+  if (TARGET_VANITY) {
+    pollTargetVanity();
+  } else {
+    establishGatewayConnection();
+  }
 }
 
 main();

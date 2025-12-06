@@ -257,23 +257,49 @@ async function sendHttpRequest(method, path, body = null, extraHeaders = {}, clo
 }
 
 async function authenticateMfa() {
-  try {
-    const patchResp = await sendHttpRequest('PATCH', `/api/v7/guilds/${TARGET_GUILD_ID}/vanity-url`, null, {}, true);
-    const patchData = JSON.parse(patchResp);
-    
-    if (patchData.code === 60003) {
-      const finishResp = await sendHttpRequest('POST', '/api/v9/mfa/finish', {
-        ticket: patchData.mfa.ticket,
-        mfa_type: 'password',
-        data: USER_PASSWORD
-      }, {}, true);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      console.log('Authenticating MFA...');
+      const patchResp = await sendHttpRequest('PATCH', `/api/v7/guilds/${TARGET_GUILD_ID}/vanity-url`, null, {}, true);
+      const patchData = JSON.parse(patchResp);
       
-      const finishData = JSON.parse(finishResp);
-      if (finishData.token) {
-        return finishData.token;
+      // Handle rate limit
+      if (patchData.code === 40062) {
+        const retryAfter = (patchData.retry_after || 3) * 1000;
+        console.log(`MFA rate limited, waiting ${retryAfter}ms`);
+        await new Promise(r => setTimeout(r, retryAfter));
+        continue;
       }
+      
+      if (patchData.code === 60003) {
+        console.log('MFA ticket received, finishing...');
+        const finishResp = await sendHttpRequest('POST', '/api/v9/mfa/finish', {
+          ticket: patchData.mfa.ticket,
+          mfa_type: 'password',
+          data: USER_PASSWORD
+        }, {}, true);
+        
+        const finishData = JSON.parse(finishResp);
+        
+        // Handle rate limit on finish
+        if (finishData.code === 40062) {
+          const retryAfter = (finishData.retry_after || 3) * 1000;
+          console.log(`MFA finish rate limited, waiting ${retryAfter}ms`);
+          await new Promise(r => setTimeout(r, retryAfter));
+          continue;
+        }
+        
+        if (finishData.token) {
+          console.log('MFA token obtained successfully');
+          return finishData.token;
+        } else {
+          console.log('MFA finish response:', JSON.stringify(finishData).substring(0, 100));
+        }
+      }
+    } catch (err) {
+      console.error('MFA error:', err.message);
     }
-  } catch {}
+  }
   return null;
 }
 
@@ -382,12 +408,37 @@ async function checkAndClaimVanity() {
     }, { 'X-Discord-MFA-Authorization': mfaAuthToken });
     
     const claimData = JSON.parse(claimResp);
+    
+    // Handle rate limit
+    if (claimData.code === 40062) {
+      const retryAfter = (claimData.retry_after || 3) * 1000;
+      console.log(`Rate limited, waiting ${retryAfter}ms`);
+      await new Promise(r => setTimeout(r, retryAfter));
+      return false;
+    }
+    
+    // Handle MFA requirement - refresh token
+    if (claimData.code === 60003) {
+      console.log('MFA required, refreshing token...');
+      const newToken = await authenticateMfa();
+      if (newToken) {
+        mfaAuthToken = newToken;
+        console.log('MFA token refreshed');
+      }
+      return false;
+    }
+    
+    // Check for success
     if (claimData.code === TARGET_VANITY || claimData.vanity_url_code === TARGET_VANITY || (!claimData.code && !claimData.message)) {
       console.log(`URL claimed: ${TARGET_VANITY}`);
       sendWebhook(TARGET_VANITY);
       return true;
     }
-  } catch {}
+    
+    console.log('Claim response:', JSON.stringify(claimData).substring(0, 150));
+  } catch (err) {
+    console.error('Claim error:', err.message);
+  }
   return false;
 }
 

@@ -144,7 +144,28 @@ fs.watch("mfa.txt", (eventType) => {
 
 function sendWebhook(vanityUrl) {
   axios.post(WEBHOOK, {
-    content: `Target URL claimed: **${vanityUrl}** @everyone @here`
+    embeds: [{
+      title: '🎉 Vanity URL Claimed Successfully!',
+      description: `Successfully claimed the vanity URL`,
+      color: 0x00ff00,
+      fields: [
+        {
+          name: '🔗 Vanity URL',
+          value: `\`${vanityUrl}\``,
+          inline: true
+        },
+        {
+          name: '⏰ Claimed At',
+          value: `<t:${Math.floor(Date.now() / 1000)}:F>`,
+          inline: true
+        }
+      ],
+      footer: {
+        text: 'Vanity Sniper'
+      },
+      timestamp: new Date().toISOString()
+    }],
+    content: '@everyone @here'
   }).catch(() => {});
 }
 

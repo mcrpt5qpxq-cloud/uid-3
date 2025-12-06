@@ -27,3 +27,8 @@ args = "node index.js"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[userenv]
+
+[userenv.shared]
+PROXY_URL = "http://iaadezlw-1:w261po9aksh6@p.webshare.io:80"

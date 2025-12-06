@@ -33,7 +33,7 @@ async function fetchWebshareProxies() {
   try {
     const response = await axios.get('https://proxy.webshare.io/api/v2/proxy/list/', {
       params: {
-        mode: 'direct',
+        mode: 'backbone',
         page: 1,
         page_size: 25
       },
@@ -51,7 +51,8 @@ async function fetchWebshareProxies() {
       console.log('No proxies found in Webshare account');
     }
   } catch (err) {
-    console.error('Failed to fetch Webshare proxies:', err.response?.data?.detail || err.message);
+    const errorDetail = err.response?.data?.detail || err.response?.data || err.message;
+    console.error('Failed to fetch Webshare proxies:', JSON.stringify(errorDetail));
   }
   return null;
 }

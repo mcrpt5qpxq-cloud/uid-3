@@ -4,6 +4,9 @@ import net from 'net';
 import axios from 'axios';
 import fs from 'fs';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const USER_TOKEN = process.env.USER_TOKEN || '';
 const TARGET_GUILD_ID = process.env.TARGET_GUILD_ID || '';

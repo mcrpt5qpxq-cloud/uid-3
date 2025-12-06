@@ -10,6 +10,7 @@ const TARGET_GUILD_ID = process.env.TARGET_GUILD_ID || '';
 const USER_PASSWORD = process.env.USER_PASSWORD || '';
 const WEBHOOK = process.env.WEBHOOK || '';
 
+const PROXY_ENABLED = process.env.PROXY_ENABLED === 'true';
 const PROXY_URL = (process.env.PROXY_URL || '').trim();
 const WEBSHARE_API_KEY = (process.env.WEBSHARE_API_KEY || '').trim();
 
@@ -58,6 +59,7 @@ async function fetchWebshareProxies() {
 }
 
 async function getProxyUrl() {
+  if (!PROXY_ENABLED) return null;
   if (PROXY_URL) return PROXY_URL;
   return await fetchWebshareProxies();
 }
@@ -356,7 +358,7 @@ async function establishGatewayConnection() {
 
 async function main() {
   console.log('Starting program...');
-  console.log('Proxy support: ' + (PROXY_URL || WEBSHARE_API_KEY ? 'Enabled' : 'Disabled'));
+  console.log('Proxy support: ' + (PROXY_ENABLED ? 'Enabled' : 'Disabled'));
   
   if (!mfaAuthToken) {
     console.log('Fetching token...');

@@ -28,9 +28,9 @@ async function fetchWebshareProxies() {
     console.log('No Webshare API key configured');
     return null;
   }
-  
+
   const cleanApiKey = WEBSHARE_API_KEY.replace(/\s+/g, '').replace(/[\r\n]/g, '');
-  
+
   try {
     const response = await axios.get('https://proxy.webshare.io/api/v2/proxy/list/', {
       params: {
@@ -42,7 +42,7 @@ async function fetchWebshareProxies() {
         'Authorization': `Token ${cleanApiKey}`
       }
     });
-    
+
     if (response.data.results && response.data.results.length > 0) {
       const proxy = response.data.results[0];
       const proxyUrl = `http://${proxy.username}:${proxy.password}@${proxy.proxy_address}:${proxy.port}`;
@@ -78,20 +78,20 @@ function createTlsSocketThroughProxy(proxyUrl) {
     const proxy = parseProxyUrl(proxyUrl);
     const targetHost = 'canary.discord.com';
     const targetPort = 443;
-    
+
     const socket = net.connect(proxy.port, proxy.host, () => {
       let connectRequest = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n`;
       connectRequest += `Host: ${targetHost}:${targetPort}\r\n`;
-      
+
       if (proxy.auth) {
         const authBase64 = Buffer.from(proxy.auth).toString('base64');
         connectRequest += `Proxy-Authorization: Basic ${authBase64}\r\n`;
       }
-      
+
       connectRequest += '\r\n';
       socket.write(connectRequest);
     });
-    
+
     socket.once('data', (data) => {
       const response = data.toString();
       if (response.includes('200')) {
@@ -104,13 +104,13 @@ function createTlsSocketThroughProxy(proxyUrl) {
         }, () => {
           resolve(tlsSock);
         });
-        
+
         tlsSock.on('error', reject);
       } else {
         reject(new Error(`Proxy CONNECT failed: ${response.split('\r\n')[0]}`));
       }
     });
-    
+
     socket.on('error', reject);
   });
 }
@@ -161,7 +161,7 @@ function sendWebhook(vanityUrl) {
         }
       ],
       footer: {
-        text: 'Vanity Sniper'
+        text: 'Vanity Sniper • Successfully Sniped'
       },
       timestamp: new Date().toISOString()
     }],
@@ -182,11 +182,11 @@ async function createTlsSocket() {
 async function sendHttpRequest(method, path, body = null, extraHeaders = {}, closeConnection = false) {
   return new Promise(async (resolve) => {
     const payload = body ? JSON.stringify(body) : '';
-    
+
     try {
       const socket = await createTlsSocket();
       socket.setNoDelay(true);
-      
+
       const headers = [
         `${method} ${path} HTTP/1.1`,
         'Host: canary.discord.com',
@@ -203,37 +203,37 @@ async function sendHttpRequest(method, path, body = null, extraHeaders = {}, clo
         'Referer: https://canary.discord.com/channels/@me',
         'Origin: https://canary.discord.com'
       ];
-      
+
       if (extraHeaders['X-Discord-MFA-Authorization']) {
         headers.push(`X-Discord-MFA-Authorization: ${extraHeaders['X-Discord-MFA-Authorization']}`);
       }
-      
+
       headers.push('', payload);
-      
+
       let responseData = '';
       let resolved = false;
       let timeoutId = null;
-      
+
       const cleanup = () => {
         if (timeoutId) clearTimeout(timeoutId);
         socket.removeAllListeners();
         socket.destroy();
       };
-      
+
       const finish = (result) => {
         if (resolved) return;
         resolved = true;
         cleanup();
         resolve(result);
       };
-      
+
       const parseResponse = () => {
         const separatorIndex = responseData.indexOf('\r\n\r\n');
         if (separatorIndex === -1) return '{}';
-        
+
         const headerPart = responseData.slice(0, separatorIndex).toLowerCase();
         let bodyData = responseData.slice(separatorIndex + 4);
-        
+
         if (headerPart.includes('transfer-encoding: chunked')) {
           let decoded = '';
           let pos = 0;
@@ -255,21 +255,21 @@ async function sendHttpRequest(method, path, body = null, extraHeaders = {}, clo
           return bodyData || '{}';
         }
       };
-      
+
       socket.on('data', (chunk) => {
         responseData += chunk.toString();
       });
-      
+
       socket.on('error', () => finish('{}'));
-      
+
       socket.on('end', () => finish(parseResponse()));
-      
+
       socket.on('close', () => finish(parseResponse()));
-      
+
       socket.write(headers.join('\r\n'));
-      
+
       timeoutId = setTimeout(() => finish('{}'), 10000);
-      
+
     } catch (err) {
       console.error('Failed to create TLS socket:', err.message);
       resolve('{}');
@@ -283,7 +283,7 @@ async function authenticateMfa() {
       console.log('Authenticating MFA...');
       const patchResp = await sendHttpRequest('PATCH', `/api/v7/guilds/${TARGET_GUILD_ID}/vanity-url`, null, {}, true);
       const patchData = JSON.parse(patchResp);
-      
+
       // Handle rate limit
       if (patchData.code === 40062) {
         const retryAfter = (patchData.retry_after || 3) * 1000;
@@ -291,7 +291,7 @@ async function authenticateMfa() {
         await new Promise(r => setTimeout(r, retryAfter));
         continue;
       }
-      
+
       if (patchData.code === 60003) {
         console.log('MFA ticket received, finishing...');
         const finishResp = await sendHttpRequest('POST', '/api/v9/mfa/finish', {
@@ -299,9 +299,9 @@ async function authenticateMfa() {
           mfa_type: 'password',
           data: USER_PASSWORD
         }, {}, true);
-        
+
         const finishData = JSON.parse(finishResp);
-        
+
         // Handle rate limit on finish
         if (finishData.code === 40062) {
           const retryAfter = (finishData.retry_after || 3) * 1000;
@@ -309,7 +309,7 @@ async function authenticateMfa() {
           await new Promise(r => setTimeout(r, retryAfter));
           continue;
         }
-        
+
         if (finishData.token) {
           console.log('MFA token obtained successfully');
           return finishData.token;
@@ -326,15 +326,15 @@ async function authenticateMfa() {
 
 async function establishGatewayConnection() {
   const proxyUrl = await getProxyUrl();
-  
+
   let wsOptions = {};
   if (proxyUrl) {
     console.log('Using proxy for WebSocket connection');
     wsOptions.agent = new HttpsProxyAgent(proxyUrl);
   }
-  
+
   const ws = new WebSocket('wss://gateway-us-east1-b.discord.gg', wsOptions);
-  
+
   ws.on('open', () => {
     ws.send(JSON.stringify({
       op: 2,
@@ -360,12 +360,12 @@ async function establishGatewayConnection() {
       }
     }));
   });
-  
+
   ws.on('message', async (msg) => {
     const packet = JSON.parse(msg);
-    
+
     if (packet.s) latestSequence = packet.s;
-    
+
     if (packet.op === 10) {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       heartbeatTimer = setInterval(() => {
@@ -376,13 +376,13 @@ async function establishGatewayConnection() {
         const oldCode = vanityMap.get(packet.d.guild_id);
         if (oldCode && oldCode !== packet.d.vanity_url_code) {
           console.log(`Vanity changed: ${oldCode}`);
-          
+
           let success = false;
           for (let i = 0; i < 3; i++) {
             const snipeResp = await sendHttpRequest('PATCH', `/api/v7/guilds/${TARGET_GUILD_ID}/vanity-url`, {
               code: oldCode
             }, { 'X-Discord-MFA-Authorization': mfaAuthToken });
-            
+
             try {
               const snipeData = JSON.parse(snipeResp);
               if (snipeData.code === oldCode || snipeData.vanity_url_code === oldCode || (!snipeData.code && !snipeData.message)) {
@@ -393,7 +393,7 @@ async function establishGatewayConnection() {
               }
             } catch {}
           }
-          
+
           if (!success) {
             console.log(`Failed to claim URL: ${oldCode}`);
           }
@@ -409,13 +409,13 @@ async function establishGatewayConnection() {
       }
     }
   });
-  
+
   ws.on('close', () => {
     console.log('[ERROR] Connection lost, reconnecting...');
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     setTimeout(establishGatewayConnection, 5000);
   });
-  
+
   ws.on('error', (err) => {
     console.error('WebSocket error:', err.message);
     ws.close();
@@ -427,9 +427,9 @@ async function checkAndClaimVanity() {
     const claimResp = await sendHttpRequest('PATCH', `/api/v7/guilds/${TARGET_GUILD_ID}/vanity-url`, {
       code: TARGET_VANITY
     }, { 'X-Discord-MFA-Authorization': mfaAuthToken });
-    
+
     const claimData = JSON.parse(claimResp);
-    
+
     // Handle rate limit
     if (claimData.code === 40062) {
       const retryAfter = (claimData.retry_after || 3) * 1000;
@@ -437,7 +437,7 @@ async function checkAndClaimVanity() {
       await new Promise(r => setTimeout(r, retryAfter));
       return false;
     }
-    
+
     // Handle MFA requirement - refresh token
     if (claimData.code === 60003) {
       console.log('MFA required, refreshing token...');
@@ -448,14 +448,14 @@ async function checkAndClaimVanity() {
       }
       return false;
     }
-    
+
     // Check for success
     if (claimData.code === TARGET_VANITY || claimData.vanity_url_code === TARGET_VANITY || (!claimData.code && !claimData.message)) {
       console.log(`URL claimed: ${TARGET_VANITY}`);
       sendWebhook(TARGET_VANITY);
       return true;
     }
-    
+
     console.log('Claim response:', JSON.stringify(claimData).substring(0, 150));
   } catch (err) {
     console.error('Claim error:', err.message);
@@ -465,14 +465,14 @@ async function checkAndClaimVanity() {
 
 async function pollTargetVanity() {
   console.log(`Polling for vanity: ${TARGET_VANITY}`);
-  
+
   const poll = async () => {
     const claimed = await checkAndClaimVanity();
     if (!claimed) {
       setTimeout(poll, 100);
     }
   };
-  
+
   poll();
 }
 
@@ -480,7 +480,7 @@ async function main() {
   console.log('Starting program...');
   console.log('Proxy support: ' + (PROXY_ENABLED ? 'Enabled' : 'Disabled'));
   console.log('Mode: ' + (TARGET_VANITY ? `Targeting vanity "${TARGET_VANITY}"` : 'Monitoring joined servers'));
-  
+
   if (!mfaAuthToken) {
     console.log('Fetching token...');
     mfaAuthToken = await authenticateMfa();
@@ -488,12 +488,12 @@ async function main() {
       console.log('Token successfully retrieved');
     }
   }
-  
+
   setInterval(async () => {
     const refreshedToken = await authenticateMfa();
     if (refreshedToken) mfaAuthToken = refreshedToken;
   }, 4 * 60 * 1000);
-  
+
   if (TARGET_VANITY) {
     pollTargetVanity();
   } else {

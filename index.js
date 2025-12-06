@@ -28,6 +28,8 @@ async function fetchWebshareProxies() {
     return null;
   }
   
+  const cleanApiKey = WEBSHARE_API_KEY.replace(/\s+/g, '').replace(/[\r\n]/g, '');
+  
   try {
     const response = await axios.get('https://proxy.webshare.io/api/v2/proxy/list/', {
       params: {
@@ -36,7 +38,7 @@ async function fetchWebshareProxies() {
         page_size: 25
       },
       headers: {
-        'Authorization': `Token ${WEBSHARE_API_KEY}`
+        'Authorization': `Token ${cleanApiKey}`
       }
     });
     

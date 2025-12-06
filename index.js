@@ -165,7 +165,7 @@ function sendWebhook(vanityUrl) {
       },
       timestamp: new Date().toISOString()
     }],
-    content: '@everyone @here'
+    content: '<@1418277265665560609>'
   }).catch(() => {});
 }
 

